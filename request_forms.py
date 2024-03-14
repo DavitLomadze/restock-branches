@@ -26,16 +26,17 @@ logging.basicConfig(level=logging.DEBUG, encoding= 'utf-8',
 EVALUATION_LOC = r'D:\Tasks\yoyoso restock planning\product evaluations\product_evaluation.csv' # location of product evaluation
 SALES_LOC = r'D:\excel db\yoyoso\sales\sales_cleaned.csv' # location of sales data
 INVENTORY_LOC = r'D:\excel db\yoyoso\inventory\inventory_clean.csv'
+CLOSING_INVENTORY = r'D:\excel db\yoyoso\inventory\closing_inv_margins\closing_inventory_margins.xlsx' # grab codes from here
 
 # directory of branch files
 BRANCHES_DIR = r'D:\Tasks\yoyoso restock planning\restock branches\branches'
 
 # read csv files and clean data
-def prep_dataframes(evaluation_loc, sales_loc, inventory_loc, centr_strg_name, warehouse_list):
+def prep_dataframes(evaluation_loc, sales_loc, inventory_loc, closing_inventory_loc, centr_strg_name, warehouse_list):
     """
     product_evaluation, 
     sales_df, 
-    inventory_df, 
+    inventory_df - closed inventory file, 
     closing_inventory, 
     central_storage_df, 
     share_of_sales_by_warehouses
@@ -44,21 +45,56 @@ def prep_dataframes(evaluation_loc, sales_loc, inventory_loc, centr_strg_name, w
     # read csv files
     product_evaluation = pd.read_csv(evaluation_loc)
     sales_df = pd.read_csv(sales_loc)
+    closing_inventory = pd.read_excel(closing_inventory_loc, skiprows=2)
     inventory_df = pd.read_csv(inventory_loc)
+    
+    # clean inventory_df
+    inventory_df.sku = inventory_df.sku.astype('str')
+    inventory_df['date'] = inventory_df.year.astype('str') + '-' + inventory_df.month.astype('str')
+    inventory_df['date'] = pd.to_datetime(inventory_df['date'])
     
     # clean data
     sales_df.sku = sales_df.sku.astype('str') # change `sku` type to str
-    inventory_df.sku = inventory_df.sku.astype('str') # change `sku` type to str
-    inventory_df['date'] = inventory_df.year.astype('str') + "-" + inventory_df.month.astype('str') # create `date` column
-    inventory_df['date'] = pd.to_datetime(inventory_df['date']) # change `date` type to datetime
     sales_df.date = pd.to_datetime(sales_df.date)
-        
-    inventory_df = inventory_df[inventory_df.warehouse.isin(warehouse_list)] # keep only necessary warehouses
     
-    # select closing inventory
-    closing_inventory = inventory_df[inventory_df['date'] == inventory_df['date'].max()]
+    # remove columns
+    remove_columns = ['საწყობი', 'შიდა კოდი',
+        'შტრიხკოდი', 'საქონელი', 'კატეგორია',
+        'ტიპი', 'რაოდენობა (Sum)']
+    closing_inventory = closing_inventory[remove_columns]
+    
+    # rename columns
+    column_names = ['warehouse', 'code', 'sku', 'product_name', 'category', 'type', 'quantity']
+    closing_inventory.columns = column_names
+    
+    # fill down warehouse
+    closing_inventory.warehouse.ffill(inplace=True)
+    
+    # remove empty values
+    closing_inventory = closing_inventory.loc[~closing_inventory.code.isna(), :].reset_index(drop=True)
+    
+    # change sku data type
+    closing_inventory.sku = closing_inventory.sku.astype('str')
+    
+    # keep only necessary warehouses
+    closing_inventory = closing_inventory[closing_inventory.warehouse.isin(warehouse_list)]
+    
+    # remove unnecessary categories
+    remove_categories = ['საშობაო', 'დეკორაცია-აქსესუარები', 'აუთლეთი ', 'საზაფხულო',
+       'სათამაშოები', 'აქსესუარები', 'სახის მოვლა',
+       'ტანის მოვლა', 'ჭურჭელი', 'სამზარეულო',
+       'ჩანთები', 'ჰიგიენა', 'საკანცელარიო', 'აბაზანა', 'ტექსტილი',
+       'საოჯახო აქსესუარები', 'მობილურის აქსესუარები',
+       'კოსმეტიკის აქსესუარები', 'თმის აქსესუარები', 'ტექნიკა',
+       'ფიტნესი ', 'ჰაერის არომათერაპია', 'სურსათი', 'ელემენტები',
+       'ზამთრის აქსესუარები', 'თმის მოვლა', 'ბიჟუტერია ',
+       'შინაური ცხოველები', 'გაზაფხული-შემოდგომის აქსესუარები', 'ჩუსტები',
+       'სასაჩუქრე ნაკრები', 'კომპიუტერის აქსესუარები',
+       'პარფიუმერია', 'კოსმეტიკა', 'დისპლეი']
+    
+    closing_inventory = closing_inventory[closing_inventory.category.isin(remove_categories)].reset_index(drop=True)
 
-    central_storage_df = closing_inventory[closing_inventory.warehouse == centr_strg_name]
+    central_storage_df = closing_inventory[closing_inventory.warehouse == centr_strg_name].reset_index(drop=True)
     
     # shares of sales by warehouses
     share_of_sales_by_warehouses = sales_df.groupby('warehouse').agg({
@@ -92,7 +128,7 @@ def request_form(warehouse_var, closing_inventory, central_storage_name, product
     temp_df.drop(index=temp_df[temp_df.code.duplicated()].query('warehouse == @central_storage_name').index, inplace=True)
     temp_df.loc[temp_df.warehouse == central_storage_name, 'quantity'] = 0
     temp_df.loc[temp_df.warehouse == central_storage_name, 'cogs'] = 0
-    temp_df = temp_df.loc[:, ~temp_df.columns.isin(['date', 'month', 'year', 'cogs'])]
+    temp_df = temp_df.loc[:, ~temp_df.columns.isin(['cogs'])]
     
     # count count of warehouses in the dataframe
     count_warehouses_in_dataframe = len(temp_df.warehouse.unique())
@@ -123,14 +159,14 @@ def request_form(warehouse_var, closing_inventory, central_storage_name, product
     temp_df = pd.merge(left=temp_df, right=product_evaluation[['code', 'DSI', 'ABC', 'doh', 'margin']], on='code', how='left').reset_index(drop=True)
     
     # get 3 month average sales
-    pixel_sales = sales_df[sales_df.warehouse.isin(warehouse_var)]
+    temp_sales = sales_df[sales_df.warehouse.isin(warehouse_var)]
     
-    monthly_sales_by_products = pixel_sales.groupby(['code']).agg({
+    monthly_sales_by_products = temp_sales.groupby(['code']).agg({
         'quantity': 'sum',
         'cogs': 'sum'
     }).reset_index(drop=False)
     
-    total_months =  round(pd.Timedelta(pixel_sales.date.max() - pixel_sales.date.min(), 'D').days / 30.5,0)
+    total_months =  round(pd.Timedelta(temp_sales.date.max() - temp_sales.date.min(), 'D').days / 30.5,0)
     
     monthly_sales_by_products['quantity'] = round(monthly_sales_by_products['quantity'] / total_months, 0)
     monthly_sales_by_products['cogs'] = round(monthly_sales_by_products['cogs'] / total_months,2)
@@ -295,13 +331,24 @@ def format_excel_file(ws, last_row, warehouse):
         cell.border = cell_border
 
     # protect sheet
-    ws.protection.sheet = True
+    # ws.protection = SheetProtection(autoFilter=True)
 
-    for row in range(22, last_row + 1):  # Adjust the range as needed
+    ws.protection.sheet = True
+    for row in range(21, last_row + 1):  # Adjust the range as needed
         ws.cell(row=row, column=15).protection = Protection(locked=False)
+        ws.cell(row=row, column=14).protection = Protection(locked=False)
 
 # fill in values
 def populate_excel_file(ws, last_row, dataframe, inventory_df, warehouse):
+    
+    """
+    ws - active sheet,
+    last_row - calculate last_row,
+    dataframe - final file,
+    inventory_df - inventory with dates,
+    warehouse - list of warehouses
+    """
+    
     start_row = 21
     start_column = 3
 
@@ -419,13 +466,11 @@ def main():
     # filter warehouses
     warehouses_of_interest = ['1610000100 - პიქსელი საწყობი',
     '1610000200 - მარჯანიშვილი საწყობი',
-    '1610000300 - აღმაშენებელი საწყობი',
     '1610000500 - ბათუმი საწყობი',
     '1610010100 - პიქსელი - ფილიალი 1',
     '1610011000 - ცენტრალური საწყობი (სანზონა)',
     '1610011400 - ისთ ფოინთი საწყობი',
     '1610020100 - მარჯანიშვილი - ფილიალი 2',
-    '1610030100 - აღმაშენებელი - ფილიალი 3',
     '1610041100 - რუსთაველის - ფილიალი 8',
     '1610041500 - რუსთაველი 8 საწყობი',
     '1610050100 - ბათუმი მაღაზია',
@@ -441,7 +486,6 @@ def main():
     warehouse_pairs = [
         ['1610000100 - პიქსელი საწყობი', '1610010100 - პიქსელი - ფილიალი 1'],
         ['1610000200 - მარჯანიშვილი საწყობი', '1610020100 - მარჯანიშვილი - ფილიალი 2'],
-        ['1610000300 - აღმაშენებელი საწყობი', '1610030100 - აღმაშენებელი - ფილიალი 3'],
         ['1610000500 - ბათუმი საწყობი', '1610080100 - ბათუმი XS - ფილიალი'],
         ['1610011400 - ისთ ფოინთი საწყობი', '1610100100 - ისთ ფოინთი - ფილიალი 10'],
         ['1610041500 - რუსთაველი 8 საწყობი', '1610041100 - რუსთაველის - ფილიალი 8'],
@@ -453,7 +497,7 @@ def main():
 
     try:
         product_evaluation, sales_df, inventory_df, closing_inventory, central_storage_df, share_of_sales_by_warehouses = \
-            prep_dataframes(EVALUATION_LOC, SALES_LOC, INVENTORY_LOC, central_storage_name, warehouses_of_interest)
+            prep_dataframes(EVALUATION_LOC, SALES_LOC, INVENTORY_LOC, CLOSING_INVENTORY, central_storage_name, warehouses_of_interest)
     except Exception as e:
         logging.warning(f'Problem with preparation of dataframes - {e}')
 
