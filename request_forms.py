@@ -5,14 +5,13 @@ Script designed for preparing excel request forms for branch managers to create 
 # import libraries
 import pandas as pd
 from openpyxl import Workbook
-from dateutil.relativedelta import relativedelta
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.styles import Alignment, Font, NamedStyle, PatternFill, Protection, Border, Side
-from openpyxl.worksheet.table import Table, TableStyleInfo
+from openpyxl.worksheet.table import Table
 from openpyxl.worksheet.datavalidation import DataValidation
-from openpyxl.worksheet.protection import SheetProtection
 import logging
 import time
+import traceback
 
 # set up logging
 logging.basicConfig(level=logging.DEBUG, encoding= 'utf-8',
@@ -27,12 +26,13 @@ EVALUATION_LOC = r'D:\Tasks\yoyoso restock planning\product evaluations\product_
 SALES_LOC = r'D:\excel db\yoyoso\sales\sales_cleaned.csv' # location of sales data
 INVENTORY_LOC = r'D:\excel db\yoyoso\inventory\inventory_clean.csv'
 CLOSING_INVENTORY = r'D:\excel db\yoyoso\inventory\closing_inv_margins\closing_inventory_margins.xlsx' # grab codes from here
+PRODUCT_DESCRIPTION = r'D:\excel db\yoyoso\product_description.xlsx'
 
 # directory of branch files
 BRANCHES_DIR = r'D:\Tasks\yoyoso restock planning\restock branches\branches'
 
 # read csv files and clean data
-def prep_dataframes(evaluation_loc, sales_loc, inventory_loc, closing_inventory_loc, centr_strg_name, warehouse_list):
+def prep_dataframes(evaluation_loc, sales_loc, inventory_loc, closing_inventory_loc, product_description_loc, centr_strg_name, warehouse_list):
     """
     product_evaluation, 
     sales_df, 
@@ -47,24 +47,29 @@ def prep_dataframes(evaluation_loc, sales_loc, inventory_loc, closing_inventory_
     sales_df = pd.read_csv(sales_loc)
     closing_inventory = pd.read_excel(closing_inventory_loc, skiprows=2)
     inventory_df = pd.read_csv(inventory_loc)
+    product_description = pd.read_excel(product_description_loc)
+    
+    # clean product description
+    product_description = product_description[['შიდა კოდი', 'რაოდენობა ყუთში']]
+    product_description.rename({'შიდა კოდი': 'code', 'რაოდენობა ყუთში': 'box_quant'}, axis=1, inplace=True)
     
     # clean inventory_df
     inventory_df.sku = inventory_df.sku.astype('str')
     inventory_df['date'] = inventory_df.year.astype('str') + '-' + inventory_df.month.astype('str')
     inventory_df['date'] = pd.to_datetime(inventory_df['date'])
     
-    # clean data
+    # clean sales
     sales_df.sku = sales_df.sku.astype('str') # change `sku` type to str
     sales_df.date = pd.to_datetime(sales_df.date)
     
     # remove columns
     remove_columns = ['საწყობი', 'შიდა კოდი',
         'შტრიხკოდი', 'საქონელი', 'კატეგორია',
-        'ტიპი', 'რაოდენობა (Sum)']
+        'ტიპი', 'თვითღირებულება (Sum)', 'რაოდენობა (Sum)']
     closing_inventory = closing_inventory[remove_columns]
     
     # rename columns
-    column_names = ['warehouse', 'code', 'sku', 'product_name', 'category', 'type', 'quantity']
+    column_names = ['warehouse', 'code', 'sku', 'product_name', 'category', 'type', 'cogs', 'quantity']
     closing_inventory.columns = column_names
     
     # fill down warehouse
@@ -80,22 +85,25 @@ def prep_dataframes(evaluation_loc, sales_loc, inventory_loc, closing_inventory_
     closing_inventory = closing_inventory[closing_inventory.warehouse.isin(warehouse_list)]
     
     # remove unnecessary categories
-    remove_categories = ['საშობაო', 'დეკორაცია-აქსესუარები', 'აუთლეთი ', 'საზაფხულო',
+    remove_categories = ['საშობაო', 'დეკორაცია-აქსესუარები', 'საზაფხულო',
        'სათამაშოები', 'აქსესუარები', 'სახის მოვლა',
        'ტანის მოვლა', 'ჭურჭელი', 'სამზარეულო',
        'ჩანთები', 'ჰიგიენა', 'საკანცელარიო', 'აბაზანა', 'ტექსტილი',
        'საოჯახო აქსესუარები', 'მობილურის აქსესუარები',
        'კოსმეტიკის აქსესუარები', 'თმის აქსესუარები', 'ტექნიკა',
-       'ფიტნესი ', 'ჰაერის არომათერაპია', 'სურსათი', 'ელემენტები',
+       'ფიტნესი ', 'ჰაერის არომათერაპია', 'ელემენტები',
        'ზამთრის აქსესუარები', 'თმის მოვლა', 'ბიჟუტერია ',
        'შინაური ცხოველები', 'გაზაფხული-შემოდგომის აქსესუარები', 'ჩუსტები',
        'სასაჩუქრე ნაკრები', 'კომპიუტერის აქსესუარები',
-       'პარფიუმერია', 'კოსმეტიკა', 'დისპლეი']
-    
+       'პარფიუმერია', 'კოსმეტიკა']
+
     closing_inventory = closing_inventory[closing_inventory.category.isin(remove_categories)].reset_index(drop=True)
 
     central_storage_df = closing_inventory[closing_inventory.warehouse == centr_strg_name].reset_index(drop=True)
-    
+
+    # add box quant
+    closing_inventory = pd.merge(left=closing_inventory, right=product_description, on='code', how='left').reset_index(drop=False)
+
     # shares of sales by warehouses
     share_of_sales_by_warehouses = sales_df.groupby('warehouse').agg({
         'quantity': 'sum',
@@ -123,28 +131,32 @@ def request_form(warehouse_var, closing_inventory, central_storage_name, product
     central_storage_df
     """
     # product description part of the code
-    temp_df = closing_inventory.loc[(closing_inventory.warehouse == central_storage_name) |
+    temp_df = closing_inventory.copy().loc[(closing_inventory.warehouse == central_storage_name) |
                       (closing_inventory.warehouse.isin(warehouse_var)), :]
     temp_df.drop(index=temp_df[temp_df.code.duplicated()].query('warehouse == @central_storage_name').index, inplace=True)
+
     temp_df.loc[temp_df.warehouse == central_storage_name, 'quantity'] = 0
     temp_df.loc[temp_df.warehouse == central_storage_name, 'cogs'] = 0
-    temp_df = temp_df.loc[:, ~temp_df.columns.isin(['cogs'])]
+    # temp_df = temp_df.loc[:, ~temp_df.columns.isin(['cogs'])]
     
     # count count of warehouses in the dataframe
     count_warehouses_in_dataframe = len(temp_df.warehouse.unique())
     
-    # pivot to divide storage and shop inventory
-    temp_df = temp_df.pivot_table(index=['code', 'sku', 'product_name', 'category', 'type'], 
+    # keep the untouched temp_df to use it later for cogs
+    untouched_temp_df = temp_df.copy()
+    
+    # pivot to divide storage and shop inventory quantity
+    temp_df = untouched_temp_df.pivot_table(index=['code', 'sku', 'product_name', 'category', 'type'], 
                                     columns='warehouse', 
                                     values='quantity', 
                                     aggfunc='sum', 
                                     fill_value=0).reset_index(drop=False)
     
-
+    
     # drop central storage
     temp_df.drop(columns=central_storage_name, axis=1, inplace=True)
-    
-    # rename to simplify names
+
+    """# rename to simplify names
     if count_warehouses_in_dataframe == 3:
         temp_df.rename(columns={
             warehouse_var[1]: 'საწყობი',
@@ -153,7 +165,7 @@ def request_form(warehouse_var, closing_inventory, central_storage_name, product
     else:
         temp_df.rename(columns={
             warehouse_var[0]: 'მაღაზია'
-        }, inplace=True)
+        }, inplace=True)"""
     
     # merge with product evaluation
     temp_df = pd.merge(left=temp_df, right=product_evaluation[['code', 'DSI', 'ABC', 'doh', 'margin']], on='code', how='left').reset_index(drop=True)
@@ -197,16 +209,36 @@ def request_form(warehouse_var, closing_inventory, central_storage_name, product
     
     temp_df.drop(columns='cogs', inplace=True)
     
+    # combine storages' quantities into 1
     if len(warehouse_var) == 2:
         if count_warehouses_in_dataframe == 3:
-            temp_df['მარაგი'] = temp_df['საწყობი'] + temp_df['მაღაზია']
-            temp_df.drop(columns=['საწყობი', 'მაღაზია'], inplace=True)
+            temp_df['მარაგი რაოდენობა'] = temp_df[warehouse_var[0]] + temp_df[warehouse_var[1]]
+            temp_df.drop(columns=[warehouse_var[0], warehouse_var[1]], inplace=True)
         else:
-            temp_df.rename(columns={warehouse_var[0]: 'მარაგი'}, inplace=True)
+            temp_df.rename(columns={warehouse_var[0]: 'მარაგი რაოდენობა'}, inplace=True)
     else:
-        temp_df.rename(columns={'მაღაზია': 'მარაგი'}, inplace=True)
+        temp_df.rename(columns={warehouse_var[0]: 'მარაგი რაოდენობა'}, inplace=True)
 
+    
+    # pivot to divide storage and shop inventory cogs
+    temp_df_cogs = untouched_temp_df.pivot_table(index=['code', 'sku', 'product_name', 'category', 'type'], 
+                                    columns='warehouse', 
+                                    values='quantity', 
+                                    aggfunc='sum', 
+                                    fill_value=0).reset_index(drop=False)
 
+    # combine storages' cogs into 1
+    if len(warehouse_var) == 2:
+        if count_warehouses_in_dataframe == 3:
+            temp_df_cogs['მარაგი თვითღირ.'] = temp_df_cogs[warehouse_var[0]] + temp_df_cogs[warehouse_var[1]]
+            temp_df_cogs.drop(columns=[warehouse_var[0], warehouse_var[1]], inplace=True)
+        else:
+            temp_df_cogs.rename(columns={warehouse_var[0]: 'მარაგი თვითღირ.'}, inplace=True)
+    else:
+        temp_df_cogs.rename(columns={warehouse_var[0]: 'მარაგი თვითღირ.'}, inplace=True)
+
+    temp_df = pd.merge(left=temp_df, right=temp_df_cogs[['code', 'მარაგი თვითღირ.']], left_on='შიდა კოდი', right_on='code', how='left').reset_index(drop=False)
+    
     # reorder columns
     reorder_columns = ['შიდა კოდი',
     'შტრიხკოდი',
@@ -218,11 +250,12 @@ def request_form(warehouse_var, closing_inventory, central_storage_name, product
     'doh',
     'მარჟა',
     'საშუალოდ ნავაჭრი',
-    'მარაგი',
+    'მარაგი თვითღირ.',
+    'მარაგი რაოდენობა',
     'ხელმისაწვდომი']
 
     temp_df = temp_df[reorder_columns]
-
+    
     return temp_df
 
 # calculate last row of a table in excel
@@ -241,13 +274,13 @@ def initiate_excel_file():
 # format excel file
 def format_excel_file(ws, last_row, warehouse):
     # table location
-    table_range = f"C21:P{last_row}"
+    table_range = f"C21:Q{last_row}"
     # set table name
     table = Table(displayName='table', ref=table_range)
     ws.add_table(table)
     
     # change format of header cells
-    header_cells = ws['C21':'P21']
+    header_cells = ws['C21':'Q21']
 
     # change style to bold
     change_alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
@@ -260,14 +293,13 @@ def format_excel_file(ws, last_row, warehouse):
             cell.font = table_header_font_style
             
     # add validation for filling up
-    validation = DataValidation(type="custom", formula1="=O22<=N22", showErrorMessage=True,
+    validation = DataValidation(type="custom", formula1="=$P22<=$O22", showErrorMessage=True,
                                 errorTitle="გადაჭარბებით მოთხოვნა",
                                 error="მოთხოვნილი რაოდენობა ნაკლები ან ტოლი უნდა იყოს ხელმისაწვდომ რაოდენობაზე")
     ws.add_data_validation(validation)
-    validation.add(f"O22:O{last_row}")
+    validation.add(f"O22:P{last_row}")
     
     # set title of for the excel file
-    # TODO: should account for less than 2 storage names
     try:
         branch_name = warehouse[1].split(" - ")[1]
     except Exception as e:
@@ -293,9 +325,9 @@ def format_excel_file(ws, last_row, warehouse):
     ws.row_dimensions[15].height = 8
     ws.row_dimensions[20].height = 8
 
-    # change color of cells in range 'C22:P22' to '4F81BD' and font color to 'FFFFFF'
+    # change color of cells in range 'C21:Q21' to '4F81BD' and font color to 'FFFFFF'
 
-    cell_range = ws['C21:P21']
+    cell_range = ws['C21:Q21']
 
     # Define the fill color and font color
     fill_color = PatternFill(start_color='4F81BD', end_color='4F81BD', fill_type='solid')
@@ -326,7 +358,7 @@ def format_excel_file(ws, last_row, warehouse):
     cell_border = Border(left=border_side, right=border_side, top=border_side, bottom=border_side)
 
     for row in range(22, last_row + 1):
-        cell = ws.cell(row=row, column=15)
+        cell = ws.cell(row=row, column=16)
         cell.fill = fill_color
         cell.border = cell_border
 
@@ -335,8 +367,10 @@ def format_excel_file(ws, last_row, warehouse):
 
     ws.protection.sheet = True
     for row in range(21, last_row + 1):  # Adjust the range as needed
-        ws.cell(row=row, column=15).protection = Protection(locked=False)
-        ws.cell(row=row, column=14).protection = Protection(locked=False)
+        ws.cell(row=row, column=16).protection = Protection(locked=False)
+
+    prot = ws.protection
+    prot.autoFilter = False
 
 # fill in values
 def populate_excel_file(ws, last_row, dataframe, inventory_df, warehouse):
@@ -360,14 +394,14 @@ def populate_excel_file(ws, last_row, dataframe, inventory_df, warehouse):
             ws.cell(row=r_idx, column=c_idx, value=value)
 
     fillin_name = 'შევსება'
-    ws["O21"].value = fillin_name
+    ws["P21"].value = fillin_name
 
     # add fill up column
     restock_name = 'განახლებული'
-    ws["P21"].value = restock_name
+    ws["Q21"].value = restock_name
 
     for row in range(22, last_row+1):
-        ws[f"P{row}"] = f'=O{row} + M{row}'
+        ws[f"Q{row}"] = f'=O{row} + P{row}'
 
     # set up informational section
     abc_section = 'ABC-ს გადანაწილება'
@@ -415,7 +449,7 @@ def populate_excel_file(ws, last_row, dataframe, inventory_df, warehouse):
     # current abc allocation
     for row in range(5,8):
         cell = ws[f'E{row}']
-        cell.value = f'=SUMIF(table[ABC],C{row},table[მარაგი])/SUM(table[მარაგი])'
+        cell.value = f'=SUMIF(table[ABC],C{row},table[მარაგი რაოდენობა])/SUM(table[მარაგი რაოდენობა])'
         cell.style = percent_style
 
     # abc allocation after restocking
@@ -425,8 +459,8 @@ def populate_excel_file(ws, last_row, dataframe, inventory_df, warehouse):
         cell.style = percent_style
 
     # recommendation about how many products to add
-    max_quant_in_pixel_df = inventory_df[inventory_df.warehouse.isin(warehouse)].groupby('date')['quantity'].sum().reset_index(drop=False)
-    max_quantity_pixel = max_quant_in_pixel_df.quantity.max()
+    max_cogs_in_wh_df = inventory_df[inventory_df.warehouse.isin(warehouse)].groupby('date')['cogs'].sum().reset_index(drop=False)
+    max_cogs_wh = max_cogs_in_wh_df.cogs.max()
 
     ws["C10"].value = "მაქს ტევადობა"
     ws["C11"].value = "მინ რაოდენობა"
@@ -435,9 +469,9 @@ def populate_excel_file(ws, last_row, dataframe, inventory_df, warehouse):
     ws["C14"].value = "მაქს შესავსები"
 
     # set values
-    ws["D10"].value = max_quantity_pixel
-    ws["D11"].value = 0.7 * max_quantity_pixel
-    ws["D12"].value = '=SUM(table[განახლებული])'
+    ws["D10"].value = max_cogs_wh
+    ws["D11"].value = 0.7 * max_cogs_wh
+    ws["D12"].value = '=(SUM(table[მარაგი თვითღირ.]) / SUM(table[მარაგი რაოდენობა])) * SUM(table[განახლებული])'
     ws['D13'].value = '=D11 - D12'
     ws["D14"].value = '=D10 - D12'
 
@@ -497,7 +531,7 @@ def main():
 
     try:
         product_evaluation, sales_df, inventory_df, closing_inventory, central_storage_df, share_of_sales_by_warehouses = \
-            prep_dataframes(EVALUATION_LOC, SALES_LOC, INVENTORY_LOC, CLOSING_INVENTORY, central_storage_name, warehouses_of_interest)
+            prep_dataframes(EVALUATION_LOC, SALES_LOC, INVENTORY_LOC, CLOSING_INVENTORY, PRODUCT_DESCRIPTION, central_storage_name, warehouses_of_interest)
     except Exception as e:
         logging.warning(f'Problem with preparation of dataframes - {e}')
 
@@ -529,7 +563,7 @@ def main():
         try:
             format_excel_file(ws, last_row, w)
         except Exception as e:
-            logging.warning(f'Problem with formating of excel file - {e}')
+            logging.warning(f'Problem with formating of excel file - {e} - {traceback.format_exc()}')
             logging.warning(f'failed: {w}')
             continue
         
