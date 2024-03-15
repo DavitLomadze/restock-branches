@@ -116,11 +116,11 @@ def prep_dataframes(evaluation_loc, sales_loc, inventory_loc, closing_inventory_
     share_of_sales_by_warehouses['share'] = round(share_of_sales_by_warehouses['cogs'] / total_cogs,2)
     share_of_sales_by_warehouses.drop(columns=['cogs', 'quantity'], axis=1, inplace=True)
     
-    return product_evaluation, sales_df, inventory_df, closing_inventory, central_storage_df, share_of_sales_by_warehouses
+    return product_evaluation, sales_df, inventory_df, closing_inventory, product_description, central_storage_df, share_of_sales_by_warehouses
 
 
 # prepare form for each warehouse
-def request_form(warehouse_var, closing_inventory, central_storage_name, product_evaluation, sales_df, share_of_sales_by_warehouses, central_storage_df):
+def request_form(warehouse_var, closing_inventory, central_storage_name, product_evaluation, sales_df, share_of_sales_by_warehouses, central_storage_df, product_description_df):
     """
     warehouse_var, 
     closing_inventory, 
@@ -239,6 +239,11 @@ def request_form(warehouse_var, closing_inventory, central_storage_name, product
 
     temp_df = pd.merge(left=temp_df, right=temp_df_cogs[['code', 'მარაგი თვითღირ.']], left_on='შიდა კოდი', right_on='code', how='left').reset_index(drop=False)
     
+    # merge box_quantity
+    temp_df = pd.merge(left=temp_df, right=product_description_df, on='code', how='left')
+    
+    temp_df.rename(columns={'box_quant': 'ყუთში რაოდენობა'}, inplace=True)
+    
     # reorder columns
     reorder_columns = ['შიდა კოდი',
     'შტრიხკოდი',
@@ -252,7 +257,8 @@ def request_form(warehouse_var, closing_inventory, central_storage_name, product
     'საშუალოდ ნავაჭრი',
     'მარაგი თვითღირ.',
     'მარაგი რაოდენობა',
-    'ხელმისაწვდომი']
+    'ხელმისაწვდომი',
+    'ყუთში რაოდენობა']
 
     temp_df = temp_df[reorder_columns]
     
@@ -530,7 +536,7 @@ def main():
         ]
 
     try:
-        product_evaluation, sales_df, inventory_df, closing_inventory, central_storage_df, share_of_sales_by_warehouses = \
+        product_evaluation, sales_df, inventory_df, closing_inventory, product_description_df, central_storage_df, share_of_sales_by_warehouses = \
             prep_dataframes(EVALUATION_LOC, SALES_LOC, INVENTORY_LOC, CLOSING_INVENTORY, PRODUCT_DESCRIPTION, central_storage_name, warehouses_of_interest)
     except Exception as e:
         logging.warning(f'Problem with preparation of dataframes - {e}')
@@ -538,7 +544,7 @@ def main():
     for w in warehouse_pairs:
         logging.info(f'preparing warehouses: {w}')
         try:
-            details = request_form(w, closing_inventory, central_storage_name, product_evaluation, sales_df, share_of_sales_by_warehouses, central_storage_df)
+            details = request_form(w, closing_inventory, central_storage_name, product_evaluation, sales_df, share_of_sales_by_warehouses, central_storage_df, product_description_df)
         except Exception as e:
             logging.warning(f'error in request form preperation: {e}')
             logging.warning(f'failed: {w}')
@@ -550,9 +556,10 @@ def main():
             ws, wb = initiate_excel_file()
         except Exception as e:
             logging.warning((f'Problem with initiating excel file - {e}'))
-            logging.warning(f'failed: {w}')
+            logging.warning(f'failed: {w} - {traceback.format_exc()}')
             continue
         
+        details = details.loc[:, ~details.columns.isin(['ყუთში რაოდენობა'])]
         try:
             populate_excel_file(ws, last_row, details, inventory_df, w)
         except Exception as e:
