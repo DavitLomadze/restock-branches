@@ -4,6 +4,7 @@ Script designed for preparing excel request forms for branch managers to create 
 
 # import libraries
 import pandas as pd
+import numpy as np
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.styles import Alignment, Font, NamedStyle, PatternFill, Protection, Border, Side
@@ -223,7 +224,7 @@ def request_form(warehouse_var, closing_inventory, central_storage_name, product
     # pivot to divide storage and shop inventory cogs
     temp_df_cogs = untouched_temp_df.pivot_table(index=['code', 'sku', 'product_name', 'category', 'type'], 
                                     columns='warehouse', 
-                                    values='quantity', 
+                                    values='cogs', 
                                     aggfunc='sum', 
                                     fill_value=0).reset_index(drop=False)
 
@@ -244,21 +245,65 @@ def request_form(warehouse_var, closing_inventory, central_storage_name, product
     
     temp_df.rename(columns={'box_quant': 'ყუთში რაოდენობა'}, inplace=True)
     
+    # add recommended quantity
+    recommended_quantity = np.where(
+        temp_df['ხელმისაწვდომი'] == 0, 
+        0,  # If true, set recommended quantity to 0
+        np.where(
+            round((temp_df['საშუალოდ ნავაჭრი'] - temp_df['მარაგი რაოდენობა']) / temp_df['ყუთში რაოდენობა'], 0) * temp_df['ყუთში რაოდენობა'] >= temp_df['ხელმისაწვდომი'],
+            round((temp_df['საშუალოდ ნავაჭრი'] - temp_df['მარაგი რაოდენობა']) / temp_df['ყუთში რაოდენობა'], 0) * temp_df['ყუთში რაოდენობა'],  # If true, use this calculation
+            round(temp_df['ხელმისაწვდომი'] / temp_df['ყუთში რაოდენობა'], 0) * temp_df['ყუთში რაოდენობა']  # If false, use this calculation
+        )
+    )
+
+    temp_df['რეკომენდირებული რაოდენობა'] = recommended_quantity
+
+    # set priorities
+    good_dsi = 90
+    good_doh = 180
+    average_margin = 54.47
+    
+    """
+    პრიორიტეტები - A, B, C, D
+    """
+    
+    temp_df['პრიორიტეტულობა'] = np.where(
+        (
+            ((temp_df['ABC'] == 'A') & (temp_df['doh'] > good_doh) & (temp_df['DSI'] <= good_dsi) & (temp_df['მარჟა'] >= average_margin)) |
+            ((temp_df['ABC'] == 'B') & (temp_df['doh'] > good_doh) & (temp_df['DSI'] <= good_dsi) & (temp_df['მარჟა'] >= average_margin))
+        ),
+        'A',  # Value if condition is true
+        np.where(
+            (
+                ((temp_df['ABC'] == 'A') & (temp_df['doh'] <= good_doh) & (temp_df['DSI'] <= good_dsi)) |
+                ((temp_df['ABC'] == 'B') & (temp_df['DSI'] <= good_dsi) & (temp_df['doh'] <= good_doh))
+            ),
+            'B',
+            np.where(
+                (
+                    ((temp_df['ABC'] == 'B') & (temp_df['doh'] > good_doh) & (temp_df['DSI'] > good_dsi) & (temp_df['მარჟა'] < average_margin)) |
+                    ((temp_df['ABC'] == 'C') & (temp_df['DSI'] > good_dsi) & (temp_df['doh'] > good_doh) & (temp_df['მარჟა'] < average_margin))
+                ),
+                'D',
+                'C'
+            )
+        )
+    )
+
+    temp_df.to_excel('check_logic.xlsx', index=False)
+    
     # reorder columns
     reorder_columns = ['შიდა კოდი',
     'შტრიხკოდი',
     'დასახელება',
     'კატეგორია',
     'ტიპი',
-    'DSI',
-    'ABC',
-    'doh',
-    'მარჟა',
+    'პრიორიტეტულობა',
     'საშუალოდ ნავაჭრი',
     'მარაგი თვითღირ.',
     'მარაგი რაოდენობა',
-    'ხელმისაწვდომი',
-    'ყუთში რაოდენობა']
+    'რეკომენდირებული რაოდენობა',
+    'ხელმისაწვდომი']
 
     temp_df = temp_df[reorder_columns]
     
@@ -280,13 +325,13 @@ def initiate_excel_file():
 # format excel file
 def format_excel_file(ws, last_row, warehouse):
     # table location
-    table_range = f"C21:Q{last_row}"
+    table_range = f"C21:O{last_row}"
     # set table name
     table = Table(displayName='table', ref=table_range)
     ws.add_table(table)
     
     # change format of header cells
-    header_cells = ws['C21':'Q21']
+    header_cells = ws['C21':'O21']
 
     # change style to bold
     change_alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
@@ -299,11 +344,11 @@ def format_excel_file(ws, last_row, warehouse):
             cell.font = table_header_font_style
             
     # add validation for filling up
-    validation = DataValidation(type="custom", formula1="=$P22<=$O22", showErrorMessage=True,
+    validation = DataValidation(type="custom", formula1="=$N22<=$M22", showErrorMessage=True,
                                 errorTitle="გადაჭარბებით მოთხოვნა",
                                 error="მოთხოვნილი რაოდენობა ნაკლები ან ტოლი უნდა იყოს ხელმისაწვდომ რაოდენობაზე")
     ws.add_data_validation(validation)
-    validation.add(f"O22:P{last_row}")
+    validation.add(f"M22:N{last_row}")
     
     # set title of for the excel file
     try:
@@ -327,13 +372,13 @@ def format_excel_file(ws, last_row, warehouse):
     ws.column_dimensions['F'].width = 15
 
     ws.row_dimensions[2].height = 8
-    ws.row_dimensions[8].height = 8
-    ws.row_dimensions[15].height = 8
+    ws.row_dimensions[9].height = 8
+    # ws.row_dimensions[15].height = 8
     ws.row_dimensions[20].height = 8
 
     # change color of cells in range 'C21:Q21' to '4F81BD' and font color to 'FFFFFF'
 
-    cell_range = ws['C21:Q21']
+    cell_range = ws['C21:O21']
 
     # Define the fill color and font color
     fill_color = PatternFill(start_color='4F81BD', end_color='4F81BD', fill_type='solid')
@@ -347,24 +392,26 @@ def format_excel_file(ws, last_row, warehouse):
 
     # freeze rows above 23
     ws.freeze_panes = 'A22'
-
+    """
     # format dsi number
     for row in range(22, last_row+1):
         cell = ws[f'H{row}']
         cell.number_format = "#,##0"
-
+    """
+    """
     # format margin numbers
     for row in range(22, last_row+1):
         cell = ws[f'K{row}']
         cell.number_format = "#,##0.00"
-
+    """
+    
     # set style for შევსება
     fill_color = PatternFill(start_color='FFCC99', end_color='FFCC99', fill_type='solid')
     border_side = Side(style='thin', color='000000')  # Black color for borders
     cell_border = Border(left=border_side, right=border_side, top=border_side, bottom=border_side)
 
     for row in range(22, last_row + 1):
-        cell = ws.cell(row=row, column=16)
+        cell = ws.cell(row=row, column=14)
         cell.fill = fill_color
         cell.border = cell_border
 
@@ -373,7 +420,7 @@ def format_excel_file(ws, last_row, warehouse):
 
     ws.protection.sheet = True
     for row in range(21, last_row + 1):  # Adjust the range as needed
-        ws.cell(row=row, column=16).protection = Protection(locked=False)
+        ws.cell(row=row, column=14).protection = Protection(locked=False)
 
     prot = ws.protection
     prot.autoFilter = False
@@ -400,23 +447,23 @@ def populate_excel_file(ws, last_row, dataframe, inventory_df, warehouse):
             ws.cell(row=r_idx, column=c_idx, value=value)
 
     fillin_name = 'შევსება'
-    ws["P21"].value = fillin_name
+    ws["N21"].value = fillin_name
 
     # add fill up column
     restock_name = 'განახლებული'
-    ws["Q21"].value = restock_name
+    ws["O21"].value = restock_name
 
     for row in range(22, last_row+1):
-        ws[f"Q{row}"] = f'=O{row} + P{row}'
+        ws[f"O{row}"] = f'=N{row} + K{row}'
 
     # set up informational section
     abc_section = 'ABC-ს გადანაწილება'
     quantity_to_add = 'დასამატებელი რაოდენობა'
-    terminology_explanation = 'ტერმინოლოგიის განმარტება'
+    # terminology_explanation = 'ტერმინოლოგიის განმარტება'
 
     # Locations where you want to set the values
-    cell_addresses = ['B3', 'B9', 'B16']
-    section_names = [abc_section, quantity_to_add, terminology_explanation]
+    cell_addresses = ['B3', 'B10']
+    section_names = [abc_section, quantity_to_add]
 
     style_section_names = Font(size=12, bold=True)
 
@@ -427,7 +474,7 @@ def populate_excel_file(ws, last_row, dataframe, inventory_df, warehouse):
         cell.font = style_section_names  # Apply the font style
 
     # set calculations for abc section
-    subsection_headers = ['ABC', 'რეკომენდაცია', 'არსებული', 'განახლებული']
+    subsection_headers = ['ABCD', 'რეკომენდაცია', 'არსებული', 'განახლებული']
     subsection_headers_address = ['C4', 'D4', 'E4', 'F4']
     subsection_headers_styles = Font(color='A6A6A6')
 
@@ -438,10 +485,10 @@ def populate_excel_file(ws, last_row, dataframe, inventory_df, warehouse):
         cell.font = subsection_headers_styles
 
     # populate abc subsection
-    abc_abc_names = ['A', 'B', 'C']
-    abc_recommendations = [0.7, 0.2, 0.1]
+    abc_abc_names = ['A', 'B', 'C', 'D']
+    abc_recommendations = [0.4, 0.3, 0.2, 0.1]
 
-    # Assigning values to cells in column C (C6:C8) for abc_abc_names
+    # Assigning values to cells in column C (C6:C9) for abc_abc_names
     for i, value in enumerate(abc_abc_names, start=5):  # Starting from row 6
         ws[f'C{i}'].value = value
 
@@ -453,44 +500,44 @@ def populate_excel_file(ws, last_row, dataframe, inventory_df, warehouse):
         cell.style = percent_style
 
     # current abc allocation
-    for row in range(5,8):
+    for row in range(5,9):
         cell = ws[f'E{row}']
-        cell.value = f'=SUMIF(table[ABC],C{row},table[მარაგი რაოდენობა])/SUM(table[მარაგი რაოდენობა])'
+        cell.value = f'=SUMIF(table[პრიორიტეტულობა],C{row},table[მარაგი რაოდენობა])/SUM(table[მარაგი რაოდენობა])'
         cell.style = percent_style
 
     # abc allocation after restocking
-    for row in range(5,8):
+    for row in range(5,9):
         cell = ws[f'F{row}']
-        cell.value = f'=SUMIF(table[ABC],C{row},table[განახლებული])/SUM(table[განახლებული])'
+        cell.value = f'=SUMIF(table[პრიორიტეტულობა],C{row},table[განახლებული])/SUM(table[განახლებული])'
         cell.style = percent_style
 
     # recommendation about how many products to add
     max_cogs_in_wh_df = inventory_df[inventory_df.warehouse.isin(warehouse)].groupby('date')['cogs'].sum().reset_index(drop=False)
     max_cogs_wh = max_cogs_in_wh_df.cogs.max()
 
-    ws["C10"].value = "მაქს ტევადობა"
-    ws["C11"].value = "მინ რაოდენობა"
-    ws["C12"].value = "განახლებული ნაშთი"
-    ws["C13"].value = "მინ შესავსები"
-    ws["C14"].value = "მაქს შესავსები"
+    ws["C11"].value = "მაქს ტევადობა"
+    ws["C12"].value = "მინ რაოდენობა"
+    ws["C13"].value = "განახლებული ნაშთი"
+    ws["C14"].value = "მინ შესავსები"
+    ws["C15"].value = "მაქს შესავსები"
 
     # set values
-    ws["D10"].value = max_cogs_wh
-    ws["D11"].value = 0.7 * max_cogs_wh
-    ws["D12"].value = '=(SUM(table[მარაგი თვითღირ.]) / SUM(table[მარაგი რაოდენობა])) * SUM(table[განახლებული])'
-    ws['D13'].value = '=D11 - D12'
-    ws["D14"].value = '=D10 - D12'
+    ws["D11"].value = max_cogs_wh
+    ws["D12"].value = 0.7 * max_cogs_wh
+    ws["D13"].value = '=(SUM(table[მარაგი თვითღირ.]) / SUM(table[მარაგი რაოდენობა])) * SUM(table[განახლებული])'
+    ws['D14'].value = '=D12 - D13'
+    ws["D15"].value = '=D11 - D13'
 
     # change cell formats
-    for row in range(10,15):
+    for row in range(11,16):
         cell = ws[f'D{row}']
         cell.number_format = "#,##0"
-
+    """
     # terminology explanation
     ws["C17"].value = "DSI - რამდენ დღეში ამოიყიდება მარაგი"
     ws["C18"].value = "DOH - რამდენი დღეა მარაგში"
     ws["C19"].value = "A - მაღალი მოგება, B - საშუალო, C- დაბალი"
-
+    """
 # save excel file
 def save_excel_file(wb, warehouse):
     file_name = warehouse[0].split(' - ')[1]
@@ -547,7 +594,7 @@ def main():
             details = request_form(w, closing_inventory, central_storage_name, product_evaluation, sales_df, share_of_sales_by_warehouses, central_storage_df, product_description_df)
         except Exception as e:
             logging.warning(f'error in request form preperation: {e}')
-            logging.warning(f'failed: {w}')
+            logging.warning(f'failed: {w} - {traceback.format_exc()}')
             continue
         
         last_row = calculate_last_row(details)
