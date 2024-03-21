@@ -13,6 +13,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 import logging
 import time
 import traceback
+from datetime import datetime as dt
 
 # set up logging
 logging.basicConfig(level=logging.DEBUG, encoding= 'utf-8',
@@ -171,20 +172,20 @@ def request_form(warehouse_var, closing_inventory, central_storage_name, product
     # merge with product evaluation
     temp_df = pd.merge(left=temp_df, right=product_evaluation[['code', 'DSI', 'ABC', 'doh', 'margin']], on='code', how='left').reset_index(drop=True)
     
-    # get 3 month average sales
-    temp_sales = sales_df[sales_df.warehouse.isin(warehouse_var)]
+    # get monthly average sales
+    sales_by_warehouse = sales_df[sales_df.warehouse.isin(warehouse_var)]
     
-    monthly_sales_by_products = temp_sales.groupby(['code']).agg({
-        'quantity': 'sum',
-        'cogs': 'sum'
-    }).reset_index(drop=False)
+    grouped_by_code_date = sales_by_warehouse.groupby(['date', 'code']).agg({'cogs': 'sum', 'quantity': 'sum'}).reset_index(drop=False)
     
-    total_months =  round(pd.Timedelta(temp_sales.date.max() - temp_sales.date.min(), 'D').days / 30.5,0)
+    grouped_by_code_date['year'] = grouped_by_code_date.date.dt.year
+    grouped_by_code_date['month'] = grouped_by_code_date.date.dt.month
     
-    monthly_sales_by_products['quantity'] = round(monthly_sales_by_products['quantity'] / total_months, 0)
-    monthly_sales_by_products['cogs'] = round(monthly_sales_by_products['cogs'] / total_months,2)
+    grouped_by_month_year = grouped_by_code_date.groupby(['year', 'month', 'code']).agg({'cogs': 'sum', 'quantity': 'sum'}).reset_index(drop=False)
     
-    monthly_sales_by_products.loc[monthly_sales_by_products.cogs < 0, 'cogs'] = 0
+    monthly_sales_by_products = grouped_by_month_year.groupby(['code']).agg({'cogs': 'mean', 'quantity': 'mean'}).reset_index(drop=False)
+    
+    monthly_sales_by_products.quantity = round(monthly_sales_by_products.quantity, 0)
+    monthly_sales_by_products.cogs = round(monthly_sales_by_products.cogs, 2)
     
     # append average sales to closing_inventory
     temp_df = pd.merge(left=temp_df, right=monthly_sales_by_products, on='code', how='left', suffixes=('_current_warehouse', '_average sales (m)')).reset_index(drop=True)
@@ -269,20 +270,19 @@ def request_form(warehouse_var, closing_inventory, central_storage_name, product
     
     temp_df['პრიორიტეტულობა'] = np.where(
         (
-            ((temp_df['ABC'] == 'A') & (temp_df['doh'] > good_doh) & (temp_df['DSI'] <= good_dsi) & (temp_df['მარჟა'] >= average_margin)) |
-            ((temp_df['ABC'] == 'B') & (temp_df['doh'] > good_doh) & (temp_df['DSI'] <= good_dsi) & (temp_df['მარჟა'] >= average_margin))
+            ((temp_df['ABC'] == 'A') & (temp_df['doh'] <= good_doh) & (temp_df['DSI'] <= good_dsi) & (temp_df['მარჟა'] >= average_margin)) |
+            ((temp_df['ABC'] == 'B') & (temp_df['doh'] <= good_doh) & (temp_df['DSI'] <= good_dsi) & (temp_df['მარჟა'] >= average_margin))
         ),
         'A',  # Value if condition is true
         np.where(
             (
-                ((temp_df['ABC'] == 'A') & (temp_df['doh'] <= good_doh) & (temp_df['DSI'] <= good_dsi)) |
-                ((temp_df['ABC'] == 'B') & (temp_df['DSI'] <= good_dsi) & (temp_df['doh'] <= good_doh))
+                ((temp_df['ABC'] == 'A') & (temp_df['DSI'] <= good_dsi)) |
+                ((temp_df['ABC'] == 'B') & (temp_df['DSI'] <= good_dsi))
             ),
             'B',
             np.where(
                 (
-                    ((temp_df['ABC'] == 'B') & (temp_df['doh'] > good_doh) & (temp_df['DSI'] > good_dsi) & (temp_df['მარჟა'] < average_margin)) |
-                    ((temp_df['ABC'] == 'C') & (temp_df['DSI'] > good_dsi) & (temp_df['doh'] > good_doh) & (temp_df['მარჟა'] < average_margin))
+                    ((temp_df['ABC'] == 'C') & (temp_df['doh'] > good_doh) & (temp_df['DSI'] > good_dsi) & (temp_df['მარჟა'] < average_margin))
                 ),
                 'D',
                 'C'
@@ -303,6 +303,7 @@ def request_form(warehouse_var, closing_inventory, central_storage_name, product
     'მარაგი თვითღირ.',
     'მარაგი რაოდენობა',
     'რეკომენდირებული რაოდენობა',
+    'ყუთში რაოდენობა',
     'ხელმისაწვდომი']
 
     temp_df = temp_df[reorder_columns]
@@ -325,13 +326,13 @@ def initiate_excel_file():
 # format excel file
 def format_excel_file(ws, last_row, warehouse):
     # table location
-    table_range = f"C21:O{last_row}"
+    table_range = f"C21:P{last_row}"
     # set table name
     table = Table(displayName='table', ref=table_range)
     ws.add_table(table)
     
     # change format of header cells
-    header_cells = ws['C21':'O21']
+    header_cells = ws['C21':'P21']
 
     # change style to bold
     change_alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
@@ -344,11 +345,11 @@ def format_excel_file(ws, last_row, warehouse):
             cell.font = table_header_font_style
             
     # add validation for filling up
-    validation = DataValidation(type="custom", formula1="=$N22<=$M22", showErrorMessage=True,
+    validation = DataValidation(type="custom", formula1="=$O22<=$N22", showErrorMessage=True,
                                 errorTitle="გადაჭარბებით მოთხოვნა",
                                 error="მოთხოვნილი რაოდენობა ნაკლები ან ტოლი უნდა იყოს ხელმისაწვდომ რაოდენობაზე")
     ws.add_data_validation(validation)
-    validation.add(f"M22:N{last_row}")
+    validation.add(f"N22:O{last_row}")
     
     # set title of for the excel file
     try:
@@ -376,9 +377,9 @@ def format_excel_file(ws, last_row, warehouse):
     # ws.row_dimensions[15].height = 8
     ws.row_dimensions[20].height = 8
 
-    # change color of cells in range 'C21:Q21' to '4F81BD' and font color to 'FFFFFF'
+    # change color of cells in range 'C21:P21' to '4F81BD' and font color to 'FFFFFF'
 
-    cell_range = ws['C21:O21']
+    cell_range = ws['C21:P21']
 
     # Define the fill color and font color
     fill_color = PatternFill(start_color='4F81BD', end_color='4F81BD', fill_type='solid')
@@ -411,7 +412,7 @@ def format_excel_file(ws, last_row, warehouse):
     cell_border = Border(left=border_side, right=border_side, top=border_side, bottom=border_side)
 
     for row in range(22, last_row + 1):
-        cell = ws.cell(row=row, column=14)
+        cell = ws.cell(row=row, column=15)
         cell.fill = fill_color
         cell.border = cell_border
 
@@ -420,7 +421,7 @@ def format_excel_file(ws, last_row, warehouse):
 
     ws.protection.sheet = True
     for row in range(21, last_row + 1):  # Adjust the range as needed
-        ws.cell(row=row, column=14).protection = Protection(locked=False)
+        ws.cell(row=row, column=15).protection = Protection(locked=False)
 
     prot = ws.protection
     prot.autoFilter = False
@@ -435,7 +436,6 @@ def populate_excel_file(ws, last_row, dataframe, inventory_df, warehouse):
     inventory_df - inventory with dates,
     warehouse - list of warehouses
     """
-    
     start_row = 21
     start_column = 3
 
@@ -447,14 +447,14 @@ def populate_excel_file(ws, last_row, dataframe, inventory_df, warehouse):
             ws.cell(row=r_idx, column=c_idx, value=value)
 
     fillin_name = 'შევსება'
-    ws["N21"].value = fillin_name
+    ws["O21"].value = fillin_name
 
     # add fill up column
     restock_name = 'განახლებული'
-    ws["O21"].value = restock_name
+    ws["P21"].value = restock_name
 
     for row in range(22, last_row+1):
-        ws[f"O{row}"] = f'=N{row} + K{row}'
+        ws[f"P{row}"] = f'=O{row} + K{row}'
 
     # set up informational section
     abc_section = 'ABC-ს გადანაწილება'
@@ -606,7 +606,8 @@ def main():
             logging.warning(f'failed: {w} - {traceback.format_exc()}')
             continue
         
-        details = details.loc[:, ~details.columns.isin(['ყუთში რაოდენობა'])]
+        # details = details.loc[:, ~details.columns.isin(['ყუთში რაოდენობა'])]
+        
         try:
             populate_excel_file(ws, last_row, details, inventory_df, w)
         except Exception as e:
