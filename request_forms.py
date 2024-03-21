@@ -141,7 +141,7 @@ def request_form(warehouse_var, closing_inventory, central_storage_name, product
     temp_df.loc[temp_df.warehouse == central_storage_name, 'cogs'] = 0
     # temp_df = temp_df.loc[:, ~temp_df.columns.isin(['cogs'])]
     
-    # count count of warehouses in the dataframe
+    # count of warehouses in the dataframe
     count_warehouses_in_dataframe = len(temp_df.warehouse.unique())
     
     # keep the untouched temp_df to use it later for cogs
@@ -190,9 +190,10 @@ def request_form(warehouse_var, closing_inventory, central_storage_name, product
     # append average sales to closing_inventory
     temp_df = pd.merge(left=temp_df, right=monthly_sales_by_products, on='code', how='left', suffixes=('_current_warehouse', '_average sales (m)')).reset_index(drop=True)
     
-    # calculate available quantity for pixel from central storage
+    # calculate available quantity for branch from central storage
     for_temp_in_central_storage = central_storage_df[['code', 'quantity']]
-    for_temp_in_central_storage.quantity = round(for_temp_in_central_storage.quantity * share_of_sales_by_warehouses.loc[share_of_sales_by_warehouses.warehouse.isin(warehouse_var), 'share'].values[0],0)
+    for_temp_in_central_storage.quantity = round(for_temp_in_central_storage.quantity * \
+        share_of_sales_by_warehouses.loc[share_of_sales_by_warehouses.warehouse.isin(warehouse_var), 'share'].values[0],0)
         
     for_temp_in_central_storage.rename({'quantity': 'available'}, axis=1, inplace=True)
     temp_df = pd.merge(left=temp_df, right=for_temp_in_central_storage, on='code', how='left').reset_index(drop=True)
@@ -259,6 +260,10 @@ def request_form(warehouse_var, closing_inventory, central_storage_name, product
 
     temp_df['რეკომენდირებული რაოდენობა'] = recommended_quantity
 
+    # available products adjustment
+    temp_df['ხელმისაწვდომი'] = np.where(temp_df['ხელმისაწვდომი'] < temp_df['ყუთში რაოდენობა'],0,
+                                        round(temp_df['ხელმისაწვდომი'] / temp_df['ყუთში რაოდენობა'], 0) * temp_df['ყუთში რაოდენობა'])
+    
     # set priorities
     good_dsi = 90
     good_doh = 180
