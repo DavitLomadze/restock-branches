@@ -397,7 +397,7 @@ def format_excel_file(ws, last_row, warehouse):
             c.font = font_color
 
     # freeze rows above 23
-    ws.freeze_panes = 'A22'
+    # ws.freeze_panes = 'A22'
     """
     # format dsi number
     for row in range(22, last_row+1):
