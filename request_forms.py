@@ -29,9 +29,20 @@ SALES_LOC = r'D:\excel db\yoyoso\sales\sales_cleaned.csv' # location of sales da
 INVENTORY_LOC = r'D:\excel db\yoyoso\inventory\inventory_clean.csv'
 CLOSING_INVENTORY = r'D:\excel db\yoyoso\inventory\closing_inv_margins\closing_inventory_margins.xlsx' # grab codes from here
 PRODUCT_DESCRIPTION = r'D:\excel db\yoyoso\product_description.xlsx'
+REMOVE_CODES = r'D:\Tasks\yoyoso restock planning\restock branches\remove_codes\ბრუნვა.xlsx'
 
 # directory of branch files
 BRANCHES_DIR = r'D:\Tasks\yoyoso restock planning\restock branches\branches'
+
+# get list of codes, that need to be removed
+def remove_codes(code_dir: str) -> pd.DataFrame:
+    code_list = pd.read_excel(code_dir, skiprows=1)
+    code_list = code_list[['შიდა კოდი']]
+    code_list.columns = ['code']
+    code_list.code = code_list.code.astype('O')
+    code_list.dropna(subset=['code'], inplace=True)
+    
+    return code_list
 
 # read csv files and clean data
 def prep_dataframes(evaluation_loc, sales_loc, inventory_loc, closing_inventory_loc, product_description_loc, centr_strg_name, warehouse_list):
@@ -312,6 +323,11 @@ def request_form(warehouse_var, closing_inventory, central_storage_name, product
     'ხელმისაწვდომი']
 
     temp_df = temp_df[reorder_columns]
+    
+    # remove unnecessary codes
+    rmv_codes_list = remove_codes(REMOVE_CODES)
+    
+    temp_df = temp_df[~temp_df['შიდა კოდი'].isin(rmv_codes_list.code)]
     
     return temp_df
 
