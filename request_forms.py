@@ -262,12 +262,14 @@ def request_form(warehouse_var, closing_inventory, central_storage_name, product
     recommended_quantity = np.where(
         temp_df['ხელმისაწვდომი'] == 0, 
         0,  # If true, set recommended quantity to 0
-        np.where(
+        np.where(temp_df['საშუალოდ ნავაჭრი'] > 0,
+            np.where(
             round((temp_df['საშუალოდ ნავაჭრი'] - temp_df['მარაგი რაოდენობა']) / temp_df['ყუთში რაოდენობა'], 0) * temp_df['ყუთში რაოდენობა'] >= temp_df['ხელმისაწვდომი'],
             round((temp_df['საშუალოდ ნავაჭრი'] - temp_df['მარაგი რაოდენობა']) / temp_df['ყუთში რაოდენობა'], 0) * temp_df['ყუთში რაოდენობა'],  # If true, use this calculation
-            round(temp_df['ხელმისაწვდომი'] / temp_df['ყუთში რაოდენობა'], 0) * temp_df['ყუთში რაოდენობა']  # If false, use this calculation
-        )
-    )
+            np.minimum(temp_df['ხელმისაწვდომი'],temp_df['ყუთში რაოდენობა'])
+        ), np.where(temp_df['ყუთში რაოდენობა'] == 1, 10 * temp_df['ყუთში რაოდენობა'], temp_df['ყუთში რაოდენობა'])
+    ))
+        
 
     temp_df['რეკომენდირებული რაოდენობა'] = recommended_quantity
 
