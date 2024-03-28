@@ -181,7 +181,7 @@ def request_form(warehouse_var, closing_inventory, central_storage_name, product
         }, inplace=True)"""
     
     # merge with product evaluation
-    temp_df = pd.merge(left=temp_df, right=product_evaluation[['code', 'DSI', 'ABC', 'doh', 'margin']], on='code', how='left').reset_index(drop=True)
+    temp_df = pd.merge(left=temp_df, right=product_evaluation[['code', 'DSI', 'ABC', 'XYZ', 'doh', 'margin']], on='code', how='left').reset_index(drop=True)
     
     # get monthly average sales
     sales_by_warehouse = sales_df[sales_df.warehouse.isin(warehouse_var)]
@@ -278,37 +278,56 @@ def request_form(warehouse_var, closing_inventory, central_storage_name, product
                                         round(temp_df['ხელმისაწვდომი'] / temp_df['ყუთში რაოდენობა'], 0) * temp_df['ყუთში რაოდენობა'])
     
     # set priorities
-    good_dsi = 90
-    good_doh = 180
-    average_margin = 54.47
+    dsi_limit = 90
+    doh_limit = 180
+    margin_limit = 54.47
     
     """
     პრიორიტეტები - A, B, C, D
     """
+    # break dataframe into dataframe groups of A,B,C, and D categories
+    a_products = temp_df[((temp_df.ABC == 'A') & ((temp_df.XYZ == 'X') | (temp_df.XYZ == 'Y')) & (temp_df.DSI <= dsi_limit) & (temp_df['მარჟა'] > margin_limit)) |
+                   ((temp_df.ABC == 'B') & (temp_df.XYZ == 'X') & (temp_df.DSI <= dsi_limit) & (temp_df['მარჟა'] > margin_limit))]
     
-    temp_df['პრიორიტეტულობა'] = np.where(
-        (
-            ((temp_df['ABC'] == 'A') & (temp_df['doh'] <= good_doh) & (temp_df['DSI'] <= good_dsi) & (temp_df['მარჟა'] >= average_margin)) |
-            ((temp_df['ABC'] == 'B') & (temp_df['doh'] <= good_doh) & (temp_df['DSI'] <= good_dsi) & (temp_df['მარჟა'] >= average_margin))
-        ),
-        'A',  # Value if condition is true
-        np.where(
-            (
-                ((temp_df['ABC'] == 'A') & (temp_df['DSI'] <= good_dsi)) |
-                ((temp_df['ABC'] == 'B') & (temp_df['DSI'] <= good_dsi))
-            ),
-            'B',
-            np.where(
-                (
-                    ((temp_df['ABC'] == 'C') & (temp_df['doh'] > good_doh) & (temp_df['DSI'] > good_dsi) & (temp_df['მარჟა'] < average_margin))
-                ),
-                'D',
-                'C'
-            )
-        )
-    )
-
-    temp_df.to_excel('check_logic.xlsx', index=False)
+    d_products = temp_df[((temp_df.ABC == 'C') & ((temp_df.XYZ == 'Y') | (temp_df.XYZ == 'Z')) & (temp_df.DSI > dsi_limit) & (temp_df['მარჟა'] <= margin_limit)) |
+                                        ((temp_df.ABC == 'B') & (temp_df.XYZ == 'Z') & (temp_df.DSI > dsi_limit) & (temp_df['მარჟა'] <= margin_limit))]
+    
+    b_products = temp_df[((temp_df.ABC == 'A') & (temp_df.XYZ == 'Z') & (temp_df.DSI <= dsi_limit) & (temp_df['მარჟა'] > margin_limit)) |
+                   ((temp_df.ABC == 'B') & (temp_df.XYZ == 'Y') & (temp_df.DSI <= dsi_limit) & (temp_df['მარჟა'] > margin_limit)) |
+                   ((temp_df.ABC == 'C') & (temp_df.XYZ == 'X') & (temp_df.DSI <= dsi_limit) & (temp_df['მარჟა'] > margin_limit)) |
+                   ((temp_df.ABC == 'A') & ((temp_df.XYZ == 'X') | (temp_df.XYZ == 'Y')) & (temp_df.DSI > dsi_limit) & (temp_df.doh <= doh_limit) & (temp_df['მარჟა'] <= margin_limit)) |
+                   ((temp_df.ABC == 'B') & (temp_df.XYZ == 'X') & (temp_df.DSI > dsi_limit) & (temp_df.doh <= doh_limit) & (temp_df['მარჟა'] <= margin_limit)) |
+                   ((temp_df.ABC == 'C') & ((temp_df.XYZ == 'Z') | (temp_df.XYZ == 'Y')) & (temp_df.DSI <= dsi_limit) & (temp_df.doh <= doh_limit) & (temp_df['მარჟა'] > margin_limit)) |
+                   ((temp_df.ABC == 'B') & (temp_df.XYZ == 'Z') & (temp_df.DSI <= dsi_limit) & (temp_df.doh <= doh_limit) & (temp_df['მარჟა'] > margin_limit))]
+    
+    c_products = temp_df[((temp_df.ABC == 'A') & (temp_df.XYZ == 'Z') & (temp_df.DSI > dsi_limit) & (temp_df['მარჟა'] <= margin_limit)) |
+                   ((temp_df.ABC == 'B') & (temp_df.XYZ == 'Y') & (temp_df.DSI > dsi_limit) & (temp_df['მარჟა'] <= margin_limit)) |
+                   ((temp_df.ABC == 'C') & (temp_df.XYZ == 'X') & (temp_df.DSI > dsi_limit) & (temp_df['მარჟა'] <= margin_limit)) |
+                   ((temp_df.ABC == 'A') & ((temp_df.XYZ == 'X') | (temp_df.XYZ == 'Y')) & (temp_df.DSI > dsi_limit) & (temp_df.doh > doh_limit) & (temp_df['მარჟა'] <= margin_limit)) |
+                   ((temp_df.ABC == 'B') & (temp_df.XYZ == 'X') & (temp_df.DSI > dsi_limit) & (temp_df.doh > doh_limit) & (temp_df['მარჟა'] <= margin_limit)) |
+                   ((temp_df.ABC == 'C') & ((temp_df.XYZ == 'Z') | (temp_df.XYZ == 'Y')) & (temp_df.DSI <= dsi_limit) & (temp_df.doh > doh_limit) & (temp_df['მარჟა'] > margin_limit)) |
+                   ((temp_df.ABC == 'B') & (temp_df.XYZ == 'Z') & (temp_df.DSI <= dsi_limit) & (temp_df.doh > doh_limit) & (temp_df['მარჟა'] > margin_limit))]
+    
+    code_list = pd.concat([a_products['code'], b_products['code'], c_products['code'], d_products['code']])
+    
+    check_df = temp_df[~temp_df.code.isin(code_list)]
+    
+    check_df['ABC-XYZ'] = check_df.ABC + check_df.XYZ
+    
+    append_to_b =  check_df[((check_df['ABC-XYZ'] == 'AX') | (check_df['ABC-XYZ'] == 'AY') | (check_df['ABC-XYZ'] == 'BX')) & ((check_df.DSI <= dsi_limit) | (check_df['მარჟა'] > margin_limit))]
+    
+    b_products = pd.concat([b_products.copy(), append_to_b])
+    
+    append_to_c = check_df[~check_df.code.isin(append_to_b.code)]
+    
+    c_products = pd.concat([c_products.copy(), append_to_c])
+    
+    a_products['პრიორიტეტულობა'] = "A"
+    b_products['პრიორიტეტულობა'] = "B"
+    c_products['პრიორიტეტულობა'] = "C"
+    d_products['პრიორიტეტულობა'] = "D"
+    
+    temp_df = pd.concat([a_products, b_products, c_products, d_products])
     
     # reorder columns
     reorder_columns = ['შიდა კოდი',
@@ -621,7 +640,7 @@ def main():
         except Exception as e:
             logging.warning(f'error in request form preperation: {e}')
             logging.warning(f'failed: {w} - {traceback.format_exc()}')
-            continue
+            break
         
         last_row = calculate_last_row(details)
         
@@ -630,7 +649,7 @@ def main():
         except Exception as e:
             logging.warning((f'Problem with initiating excel file - {e}'))
             logging.warning(f'failed: {w} - {traceback.format_exc()}')
-            continue
+            break
         
         # details = details.loc[:, ~details.columns.isin(['ყუთში რაოდენობა'])]
         
@@ -639,21 +658,21 @@ def main():
         except Exception as e:
             logging.warning(f'Problem with population of excel file - {e}')
             logging.warning(f'failed: {w}')
-            continue
+            break
         
         try:
             format_excel_file(ws, last_row, w)
         except Exception as e:
             logging.warning(f'Problem with formating of excel file - {e} - {traceback.format_exc()}')
             logging.warning(f'failed: {w}')
-            continue
+            break
         
         try:
             save_excel_file(wb, w)
         except Exception as e:
             logging.warning(f'Problem with saving of excel file - {e}')
             logging.warning(f'failed: {w}')
-            continue
+            break
         
         logging.info(f'{w} - prepared')
         
