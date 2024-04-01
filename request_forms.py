@@ -203,8 +203,8 @@ def request_form(warehouse_var, closing_inventory, central_storage_name, product
     
     # calculate available quantity for branch from central storage
     for_temp_in_central_storage = central_storage_df[['code', 'quantity']]
-    for_temp_in_central_storage.quantity = round(for_temp_in_central_storage.quantity * \
-        share_of_sales_by_warehouses.loc[share_of_sales_by_warehouses.warehouse.isin(warehouse_var), 'share'].values[0],0)
+    share_value = share_of_sales_by_warehouses.loc[share_of_sales_by_warehouses.warehouse.isin(warehouse_var), 'share'].values[0]
+    for_temp_in_central_storage['quantity'] = for_temp_in_central_storage['quantity'].apply(lambda x: round(x * share_value, 0) if x > 12 else x)
         
     for_temp_in_central_storage.rename({'quantity': 'available'}, axis=1, inplace=True)
     temp_df = pd.merge(left=temp_df, right=for_temp_in_central_storage, on='code', how='left').reset_index(drop=True)
@@ -467,6 +467,9 @@ def format_excel_file(ws, last_row, warehouse):
 
     prot = ws.protection
     prot.autoFilter = False
+    
+    # Hide column J
+    ws.column_dimensions['J'].hidden = True
 
 # fill in values
 def populate_excel_file(ws, last_row, dataframe, inventory_df, warehouse):
