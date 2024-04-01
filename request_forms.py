@@ -14,6 +14,7 @@ import logging
 import time
 import traceback
 from datetime import datetime as dt
+import sys
 
 # set up logging
 logging.basicConfig(level=logging.DEBUG, encoding= 'utf-8',
@@ -566,9 +567,29 @@ def populate_excel_file(ws, last_row, dataframe, inventory_df, warehouse):
     ws["C14"].value = "მინ შესავსები"
     ws["C15"].value = "მაქს შესავსები"
 
+    # min cogs for each branch
+    min_dictionary = {
+        "პიქსელი": 200000,
+        "ისთ ფოინთი": 170000,
+        "მარჯანიშვილი": 130000,
+        "პეკინი": 100000,
+        "თბილისი მოლი": 90000,
+        "ბათუმი მაღაზია": 160000,
+        "ბათუმი საწყობი": 30000,
+        "ყაზბეგი": 80000,
+        "რუსთაველი": 100000
+    }
+
     # set values
-    ws["D11"].value = max_cogs_wh
-    ws["D12"].value = 0.7 * max_cogs_wh
+    for key, value in min_dictionary.items():
+        if any(key in warehouse_name for warehouse_name in warehouse):
+            ws["D12"].value = value
+            break
+        else:
+            logging.error(f'Warehouse name - {key} - not in min_dictionary list - {warehouse}')
+    
+    ws["D11"].value = round(ws["D12"].value * 1.30, 2)
+    
     ws["D13"].value = '=(SUM(table[მარაგი თვითღირ.]) / SUM(table[მარაგი რაოდენობა])) * SUM(table[განახლებული])'
     ws['D14'].value = '=D12 - D13'
     ws["D15"].value = '=D11 - D13'
