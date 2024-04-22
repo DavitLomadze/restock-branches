@@ -31,19 +31,30 @@ INVENTORY_LOC = r'D:\excel db\yoyoso\inventory\inventory_clean.csv'
 CLOSING_INVENTORY = r'D:\excel db\yoyoso\inventory\closing_inv_margins\closing_inventory_margins.xlsx' # grab codes from here
 PRODUCT_DESCRIPTION = r'D:\excel db\yoyoso\product_description.xlsx'
 REMOVE_CODES = r'D:\Tasks\yoyoso restock planning\restock branches\remove_codes\ბრუნვა.xlsx'
+ADJUST_CENTRAL_STORAGE_QUANTITY = r'D:\Tasks\yoyoso restock planning\restock branches\adjust reserves\reserves.xlsx'
 
 # directory of branch files
 BRANCHES_DIR = r'D:\Tasks\yoyoso restock planning\restock branches\branches'
 
 # get list of codes, that need to be removed
 def remove_codes(code_dir: str) -> pd.DataFrame:
-    code_list = pd.read_excel(code_dir, skiprows=1)
+    code_list = pd.read_excel(code_dir)
     code_list = code_list[['შიდა კოდი']]
     code_list.columns = ['code']
-    code_list.code = code_list.code.astype('O')
+    code_list.code = code_list.code.astype('str')
     code_list.dropna(subset=['code'], inplace=True)
     
     return code_list
+
+# list of codes and quantities that need to be removed from central storage
+def adjust_central_storage(dir: str) -> pd.DataFrame:
+    adjust_quant_df = pd.read_excel(dir)
+    adjust_quant_df = adjust_quant_df[adjust_quant_df['ნაშთი სისტემაში'] > adjust_quant_df['ნაშთი']].copy()
+    adjust_quant_df['not_removed'] = adjust_quant_df['ნაშთი გზაში'] - adjust_quant_df['რეზერვი']
+    adjust_quant_df['შტრხკოდი'] = adjust_quant_df['შტრხკოდი'].astype('str')
+    adjust_quant_df = adjust_quant_df[['შტრხკოდი', 'შიდა კოდი', 'not_removed']].reset_index(drop=True)
+    
+    return adjust_quant_df
 
 # read csv files and clean data
 def prep_dataframes(evaluation_loc, sales_loc, inventory_loc, closing_inventory_loc, product_description_loc, centr_strg_name, warehouse_list):
@@ -113,8 +124,32 @@ def prep_dataframes(evaluation_loc, sales_loc, inventory_loc, closing_inventory_
 
     closing_inventory = closing_inventory[closing_inventory.category.isin(remove_categories)].reset_index(drop=True)
 
-    central_storage_df = closing_inventory[closing_inventory.warehouse == centr_strg_name].reset_index(drop=True)
-
+    central_storage_df = closing_inventory.copy()[closing_inventory.warehouse == centr_strg_name].reset_index(drop=True)
+    # adjust central storage quantities here
+    try:
+        adjust_cs_quantities = adjust_central_storage(ADJUST_CENTRAL_STORAGE_QUANTITY)
+    except Exception as e:
+        logging('error during adjusting central storage quantities: {traceback.format_exc()}')
+        raise
+    
+    try:
+        central_storage_df = pd.merge(left=central_storage_df, right=adjust_cs_quantities, left_on='sku', right_on='შტრხკოდი', how='left')
+    except Exception as e:
+        print(f'Error: {traceback.format_exc()}')
+        raise
+    
+    central_storage_df['unit_cogs'] = central_storage_df['cogs'] / central_storage_df['quantity']
+    central_storage_df['not_removed'].fillna(0, inplace=True)
+    central_storage_df['adjust_cogs'] = central_storage_df['not_removed'] * central_storage_df['unit_cogs']
+    
+    central_storage_df['quantity'] = central_storage_df['quantity'] - central_storage_df['not_removed']
+    central_storage_df['cogs'] = central_storage_df['cogs'] - central_storage_df['adjust_cogs']
+    
+    central_storage_df = central_storage_df[column_names]
+    
+    # remove later
+    central_storage_df.to_excel(r'D:\Tasks\yoyoso restock planning\restock branches\adjust reserves\check_result.xlsx')
+    
     # add box quant
     closing_inventory = pd.merge(left=closing_inventory, right=product_description, on='code', how='left').reset_index(drop=False)
 
